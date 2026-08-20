@@ -2,6 +2,8 @@
 
 这是面向普通使用者的 Windows 部署仓库，只包含启动所需的文件。完整源码和开发记录保存在 [cvat-yolo26-annotation-tool](https://github.com/Christanding/cvat-yolo26-annotation-tool)。
 
+本仓库和运行镜像都是公开的。安装者不需要登录你的 GitHub，也不需要获得私人仓库权限。
+
 ## 首次安装
 
 电脑需要安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 和 [Git for Windows](https://git-scm.com/download/win)。安装 Docker Desktop 时使用默认的 WSL 2 方式即可。
