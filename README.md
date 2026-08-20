@@ -32,13 +32,19 @@ powershell -ExecutionPolicy Bypass -File .\Start.ps1 -WorkspaceRoot D:\YOLO-Work
 
 ## 日常使用
 
-启动 Docker Desktop，在部署目录运行：
+建议在 Docker Desktop 设置中开启“登录时启动 Docker Desktop”。以后打开电脑，等 Docker Desktop 启动完成，直接访问：
+
+<http://localhost:8080>
+
+可以把这个地址收藏到 Edge。正常情况下不需要每天打开 PowerShell，也不需要重复运行 `Start.ps1`。
+
+如果网页打不开，先确认 Docker Desktop 已经启动。如果之前运行过 `Stop.ps1`，再到部署目录执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Start.ps1
 ```
 
-需要停止时运行：
+平时关闭浏览器即可，不必停止后台服务。更新、维护或确实需要释放资源时，才运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Stop.ps1
