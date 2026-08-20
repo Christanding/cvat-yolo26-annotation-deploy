@@ -74,8 +74,7 @@ $RequiredDirectories = @(
     (Join-Path $StateRoot "keys"),
     (Join-Path $StateRoot "logs"),
     (Join-Path $StateRoot "postgres"),
-    (Join-Path $StateRoot "redis"),
-    (Join-Path $StateRoot "kvrocks")
+    (Join-Path $StateRoot "redis")
 )
 foreach ($Directory in $RequiredDirectories) {
     [System.IO.Directory]::CreateDirectory($Directory) | Out-Null

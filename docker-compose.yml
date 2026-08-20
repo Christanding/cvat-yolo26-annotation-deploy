@@ -12,6 +12,7 @@ x-backend-environment: &backend-environment
   CVAT_ALLOW_STATIC_CACHE: "no"
   CVAT_NUM_PROXIES: 1
   DJANGO_LOG_SERVER_HOST: ""
+  SMOKESCREEN_OPTS: ${SMOKESCREEN_OPTS:-}
   no_proxy: opa,${no_proxy:-}
 
 x-core-dependencies: &core-dependencies
@@ -113,9 +114,7 @@ services:
       - --compact-cron
       - 0 3 * * *
     volumes:
-      - type: bind
-        source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/kvrocks"
-        target: /var/lib/kvrocks
+      - cvat_cache_db:/var/lib/kvrocks
     networks:
       - cvat
 
@@ -268,3 +267,6 @@ services:
 networks:
   cvat:
     name: yolo26-annotator
+
+volumes:
+  cvat_cache_db:
