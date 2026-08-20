@@ -1,0 +1,270 @@
+name: yolo26-annotator
+
+x-server-image: &server-image "ghcr.io/christanding/yolo26-annotator-server:${APP_VERSION:-0.1.0}"
+
+x-backend-environment: &backend-environment
+  CVAT_POSTGRES_HOST: cvat_db
+  CVAT_REDIS_INMEM_HOST: cvat_redis_inmem
+  CVAT_REDIS_INMEM_PORT: 6379
+  CVAT_REDIS_ONDISK_HOST: cvat_redis_ondisk
+  CVAT_REDIS_ONDISK_PORT: 6666
+  CVAT_LOG_IMPORT_ERRORS: "true"
+  CVAT_ALLOW_STATIC_CACHE: "no"
+  CVAT_NUM_PROXIES: 1
+  DJANGO_LOG_SERVER_HOST: ""
+  no_proxy: opa,${no_proxy:-}
+
+x-core-dependencies: &core-dependencies
+  cvat_db:
+    condition: service_started
+  cvat_redis_inmem:
+    condition: service_started
+  cvat_redis_ondisk:
+    condition: service_started
+
+x-state-volumes: &state-volumes
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/data"
+    target: /home/django/data
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/keys"
+    target: /home/django/keys
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/logs"
+    target: /home/django/logs
+
+x-state-and-readonly-workspace-volumes: &state-and-readonly-workspace-volumes
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/data"
+    target: /home/django/data
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/keys"
+    target: /home/django/keys
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/logs"
+    target: /home/django/logs
+  - type: bind
+    source: "${CVAT_WORKSPACE_ROOT:?CVAT_WORKSPACE_ROOT is required}"
+    target: /home/django/share
+    read_only: true
+    bind:
+      create_host_path: false
+  - type: tmpfs
+    target: /home/django/share/.cvat-local
+
+x-state-and-writable-workspace-volumes: &state-and-writable-workspace-volumes
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/data"
+    target: /home/django/data
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/keys"
+    target: /home/django/keys
+  - type: bind
+    source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/logs"
+    target: /home/django/logs
+  - type: bind
+    source: "${CVAT_WORKSPACE_ROOT:?CVAT_WORKSPACE_ROOT is required}"
+    target: /home/django/share
+    bind:
+      create_host_path: false
+  - type: tmpfs
+    target: /home/django/share/.cvat-local
+
+services:
+  cvat_db:
+    container_name: cvat_db
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_DB: cvat
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - type: bind
+        source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/postgres"
+        target: /var/lib/postgresql/data
+    networks:
+      - cvat
+
+  cvat_redis_inmem:
+    container_name: cvat_redis_inmem
+    image: redis:7.2.11-alpine
+    restart: always
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "100"
+      - --appendonly
+      - "yes"
+    volumes:
+      - type: bind
+        source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/redis"
+        target: /data
+    networks:
+      - cvat
+
+  cvat_redis_ondisk:
+    container_name: cvat_redis_ondisk
+    image: apache/kvrocks:2.15.0
+    restart: always
+    init: true
+    command:
+      - --compact-cron
+      - 0 3 * * *
+    volumes:
+      - type: bind
+        source: "${CVAT_STATE_DIR:?CVAT_STATE_DIR is required}/kvrocks"
+        target: /var/lib/kvrocks
+    networks:
+      - cvat
+
+  cvat_server:
+    container_name: cvat_server
+    image: *server-image
+    restart: always
+    depends_on:
+      <<: *core-dependencies
+      cvat_opa:
+        condition: service_started
+    environment:
+      <<: *backend-environment
+      DJANGO_MODWSGI_EXTRA_ARGS: ""
+      ALLOWED_HOSTS: "*"
+      ADAPTIVE_AUTO_ANNOTATION: "false"
+      NUMPROCS: 2
+      CVAT_ANALYTICS: 0
+      CVAT_LOCAL_WORKSPACE_ROOT: /home/django/share
+      CVAT_NUCLIO_DEFAULT_TIMEOUT: 1
+    command: init run server nginx
+    labels:
+      traefik.enable: "true"
+      traefik.http.services.cvat.loadbalancer.server.port: "8080"
+      traefik.http.routers.cvat.rule: >-
+        Host(`${CVAT_HOST:-localhost}`) &&
+        (PathPrefix(`/api/`) || PathPrefix(`/static/`) || PathPrefix(`/admin`) || PathPrefix(`/django-rq`))
+      traefik.http.routers.cvat.entrypoints: web
+    volumes: *state-and-readonly-workspace-volumes
+    networks:
+      cvat:
+        aliases:
+          - cvat-server
+
+  cvat_worker_utils:
+    container_name: cvat_worker_utils
+    image: *server-image
+    restart: always
+    depends_on: *core-dependencies
+    environment:
+      <<: *backend-environment
+      CVAT_LOCAL_WORKSPACE_ROOT: /home/django/share
+      CVAT_REDIS_INMEM_PASSWORD: ""
+      NUMPROCS: 1
+    command: run worker notifications cleaning local_media
+    volumes: *state-and-writable-workspace-volumes
+    networks:
+      - cvat
+
+  cvat_worker_import:
+    container_name: cvat_worker_import
+    image: *server-image
+    restart: always
+    depends_on: *core-dependencies
+    environment:
+      <<: *backend-environment
+      NUMPROCS: 2
+    command: run worker import
+    volumes: *state-and-readonly-workspace-volumes
+    networks:
+      - cvat
+
+  cvat_worker_export:
+    container_name: cvat_worker_export
+    image: *server-image
+    restart: always
+    depends_on: *core-dependencies
+    environment:
+      <<: *backend-environment
+      NUMPROCS: 2
+    command: run worker export
+    volumes: *state-and-readonly-workspace-volumes
+    networks:
+      - cvat
+
+  cvat_worker_annotation:
+    container_name: cvat_worker_annotation
+    image: *server-image
+    restart: always
+    depends_on: *core-dependencies
+    environment:
+      <<: *backend-environment
+      NUMPROCS: 1
+    command: run worker annotation
+    volumes: *state-and-readonly-workspace-volumes
+    networks:
+      - cvat
+
+  cvat_worker_chunks:
+    container_name: cvat_worker_chunks
+    image: *server-image
+    restart: always
+    depends_on: *core-dependencies
+    environment:
+      <<: *backend-environment
+      NUMPROCS: 2
+    command: run worker chunks
+    volumes: *state-and-readonly-workspace-volumes
+    networks:
+      - cvat
+
+  cvat_ui:
+    container_name: cvat_ui
+    image: "ghcr.io/christanding/yolo26-annotator-ui:${APP_VERSION:-0.1.0}"
+    restart: always
+    depends_on:
+      - cvat_server
+    labels:
+      traefik.enable: "true"
+      traefik.http.services.cvat-ui.loadbalancer.server.port: "8000"
+      traefik.http.routers.cvat-ui.rule: Host(`${CVAT_HOST:-localhost}`)
+      traefik.http.routers.cvat-ui.entrypoints: web
+    networks:
+      - cvat
+
+  traefik:
+    container_name: traefik
+    image: traefik:v3.6
+    restart: always
+    ports:
+      - 8080:8080
+    environment:
+      TRAEFIK_ENTRYPOINTS_web_ADDRESS: :8080
+      TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: "false"
+      TRAEFIK_PROVIDERS_DOCKER_NETWORK: yolo26-annotator
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - cvat
+
+  cvat_opa:
+    container_name: cvat_opa
+    image: openpolicyagent/opa:1.12.2
+    restart: always
+    command:
+      - run
+      - --server
+      - --addr=:8181
+      - --log-level=error
+      - --set=services.cvat.url=http://cvat-server:8080
+      - --set=bundles.cvat.service=cvat
+      - --set=bundles.cvat.resource=/api/auth/rules
+      - --set=bundles.cvat.polling.min_delay_seconds=5
+      - --set=bundles.cvat.polling.max_delay_seconds=15
+    networks:
+      cvat:
+        aliases:
+          - opa
+
+networks:
+  cvat:
+    name: yolo26-annotator
